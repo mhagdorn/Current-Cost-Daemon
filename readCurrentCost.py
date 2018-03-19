@@ -4,7 +4,7 @@ import time
 from xml.dom import minidom
 from optparse import OptionParser
 import sys
-import daemon,daemon.pidlockfile
+import daemon,lockfile.pidlockfile
 
 def readCurrentCost(port,interval,outname,baudrate=57600):
 
@@ -22,32 +22,59 @@ def readCurrentCost(port,interval,outname,baudrate=57600):
     # get current time
     startTime = time.time()
     # and initialise data
-    temp = 0.
-    power = 0.
-    count = 0
+    temp = {}
+    power = {}
+    count = {}
     
     while True:
         line = ser.readline()
         thisTime = time.time()
         if len(line)>0:
             xmldoc = minidom.parseString(line)
+            watts_nodes = {}
             # parse the xml
             try:
                 temperature_nodes = xmldoc.getElementsByTagName('tmpr')
                 watts_nodes = xmldoc.getElementsByTagName('ch1')[0].getElementsByTagName('watts')
+                sensor_nodes = xmldoc.getElementsByTagName('sensor')
             except:
                 continue
+            sensor = int(sensor_nodes[0].childNodes[0].nodeValue)
+            # check if sensor is already recorded
+            if sensor not in count.keys():
+                count[sensor] = 0
+                temp[sensor] = 0.
+                power[sensor] = 0.
             # accumulate data
-            temp  += float(temperature_nodes[0].childNodes[0].nodeValue)
-            power += float(watts_nodes[0].childNodes[0].nodeValue)
-            count += 1
+            temp[sensor]  += float(temperature_nodes[0].childNodes[0].nodeValue)
+            power[sensor] += float(watts_nodes[0].childNodes[0].nodeValue)
+            count[sensor] += 1
+
             # check if we should write out data
             if thisTime-startTime >= interval:
-                outfile.write("%s %f %f\n"%(time.strftime("%Y-%m-%d %H:%M:%S",time.gmtime(startTime+(thisTime-startTime)/2.)),temp/count, power/count))
-                # reset counters
-                count = 0
-                temp = 0.
-                power = 0.
+                done = 0
+                have_temp = False
+                outfile.write("%s "%(time.strftime("%Y-%m-%d %H:%M:%S",
+                                                   time.gmtime(startTime+(thisTime-startTime)/2.))))
+                # loop over sensors
+                for i in range(0,10):
+                    if i in count.keys():
+                        if count[i]>0:
+                            if not have_temp:
+                               outfile.write("%f "%(temp[i]/count[i]))
+                               have_temp = True
+                            outfile.write("%f "%(power[i]/count[i]))
+                            # reset counters
+                            count[i] = 0
+                            temp[i] = 0.
+                            power[i] = 0.
+                            done+=1
+                    else:
+                        outfile.write('NaN ')
+                    # check we have handled all the data
+                    if len(count.keys()) == done:
+                        break
+                outfile.write('\n')
                 startTime = thisTime
 
 if __name__ == "__main__":
@@ -67,7 +94,7 @@ if __name__ == "__main__":
         if options.filename == None:
             parser.error('must specify output file')
             
-        ourlockfile = daemon.pidlockfile.PIDLockFile(options.pid_file)
+        ourlockfile = lockfile.pidlockfile.PIDLockFile(options.pid_file)
         context = daemon.DaemonContext(
             working_directory='/tmp',
             umask=18 ,
