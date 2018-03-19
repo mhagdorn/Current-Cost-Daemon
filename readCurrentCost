@@ -6,10 +6,24 @@ from xml.dom import minidom
 import argparse
 import sys
 import daemon,lockfile.pidlockfile
+import ConfigParser
+
+# default configuration
+cfg = {
+    "filename" : None,
+    "serial_device" : "/dev/ttyUSB0",
+    "interval" : 300,
+    "daemon" : False,
+    "pid_file" : None,
+    }
+cfg_types = {
+    "interval" : int,
+    "daemon" : bool,
+    }
 
 def readCurrentCost(port,interval,outname,baudrate=57600):
 
-    if outname==None:
+    if outname is None:
         outfile = sys.stdout
     else:
         outfile = open(outname,'a',buffering=1)
@@ -80,20 +94,51 @@ def readCurrentCost(port,interval,outname,baudrate=57600):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parse data coming from a CurrentCost device.')
+    parser.add_argument("-c", "--config", metavar="CFG",help="read configuration from CFG")
     parser.add_argument("-f", "--file", dest="filename",help="write output to FILE (default: stdout)", metavar="FILE")
-    parser.add_argument("-s", "--serial-device", default='/dev/ttyUSB0',metavar="DEV",help="serial device to read from")
-    parser.add_argument("-i", "--interval",metavar="INT",type=int,default=300,help="interval in seconds over which data should be averaged (default:300)")
-    parser.add_argument("-d", "--daemon",action="store_true",default=False,help="run in daemon mode")
+    parser.add_argument("-s", "--serial-device",metavar="DEV",help="serial device to read from")
+    parser.add_argument("-i", "--interval",metavar="INT",type=int,help="interval in seconds over which data should be averaged (default:300)")
+    daemonGrp = parser.add_mutually_exclusive_group()    
+    daemonGrp.add_argument("-d", "--daemon",default=None,action="store_true",help="run in daemon mode")
+    daemonGrp.add_argument("-n", "--no-daemon",dest="daemon",default=None,action="store_false",help="do not run in daemon mode")
     parser.add_argument("-p", "--pid-file",metavar="FILE",help="store PID in FILE")
     args = parser.parse_args()
 
-    if args.daemon:
-        if args.pid_file == None:
+    if args.config is not None:
+        # read configuration file
+        cfgFile = ConfigParser.ConfigParser()
+        cfgFile.read(args.config)
+        sct = "CurrentCost"
+        if cfgFile.has_section(sct):
+            for k in cfg:
+                if cfgFile.has_option(sct,k):
+                    v = cfgFile.get(sct,k)
+                    if k in cfg_types:
+                        cfg[k] = cfg_types[k](v)
+                    else:
+                        cfg[k] = v
+        else:
+            print "could not find section %s in config file %s"%(sct,args.config)
+
+    # get settings from command line
+    for k in cfg:
+        if hasattr(args,k):
+            v = getattr(args,k)
+            if v is not None:
+                if k in cfg_types:
+                    cfg[k] = cfg_types[k](v)
+                else:
+                    cfg[k] = v
+            
+    if cfg["daemon"]:
+        if cfg["pid_file"] is None:
             parser.error('no pid file specified')
-        if args.filename == None:
+        if cfg["filename"] is None:
             parser.error('must specify output file')
             
-        ourlockfile = lockfile.pidlockfile.PIDLockFile(args.pid_file)
+        ourlockfile = lockfile.pidlockfile.PIDLockFile(cfg["pid_file"],timeout=1)
+        if ourlockfile.is_locked():
+            parser.error("pid file %s is already locked"%cfg["pid_file"])
         context = daemon.DaemonContext(
             working_directory='/tmp',
             umask=18 ,
@@ -101,6 +146,6 @@ if __name__ == "__main__":
             )
 
         with context:
-            readCurrentCost(args.serial_device,args.interval,args.filename)
+            readCurrentCost(cfg["serial_device"],cfg["interval"],cfg["filename"])
     else:
-        readCurrentCost(args.serial_device,args.interval,args.filename)
+        readCurrentCost(cfg["serial_device"],cfg["interval"],cfg["filename"])
